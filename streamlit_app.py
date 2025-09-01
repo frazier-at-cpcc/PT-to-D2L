@@ -31,30 +31,32 @@ def transform_grades_csv(grades_df):
     """Transform the grades CSV to create a standardized mapping table"""
     transformed_data = []
     
-    # Debug: Print what we're working with
-    st.write("**🔍 Transformation Debug:**")
-    st.write(f"DataFrame shape: {grades_df.shape}")
-    st.write(f"Columns: {list(grades_df.columns)}")
-    
     for idx, row in grades_df.iterrows():
-        st.write(f"\n**Row {idx}:**")
-        
-        # Try to find filename in any column
+        # Try to find filename in any column or combination of columns
         filename = None
-        for col_idx, col in enumerate(grades_df.columns):
-            cell_value = str(row[col])
-            st.write(f"  Column {col_idx} ('{col}'): '{cell_value}'")
-            
-            # Check for .pka files with more flexible criteria
+        
+        # First check individual columns for .pka files
+        for col in grades_df.columns:
+            cell_value = str(row[col]).strip()
             if '.pka' in cell_value.lower():
-                st.write(f"    ✅ Found .pka file!")
                 filename = cell_value
                 break
         
+        # If we found a .pka file but couldn't extract a name, try combining with previous column
+        if filename and not extract_student_name_from_filename(filename):
+            # Try combining columns (common issue where filename is split)
+            for col_idx in range(len(grades_df.columns)-1):
+                col1_val = str(row.iloc[col_idx]).strip()
+                col2_val = str(row.iloc[col_idx+1]).strip()
+                
+                if '.pka' in col2_val.lower():
+                    combined_filename = f"{col1_val} {col2_val}"
+                    if extract_student_name_from_filename(combined_filename):
+                        filename = combined_filename
+                        break
+        
         if filename:
-            st.write(f"  📄 Using filename: {filename}")
             student_name = extract_student_name_from_filename(filename)
-            st.write(f"  👤 Extracted name: {student_name}")
             
             if student_name:
                 # Split name into first and last
@@ -68,9 +70,23 @@ def transform_grades_csv(grades_df):
                     grade_cols = ['Total Percentage', 'Total_Percentage', 'total percentage', 'Grade', 'Score']
                     for col in grade_cols:
                         if col in grades_df.columns and pd.notna(row[col]):
-                            grade = row[col]
-                            st.write(f"  📊 Found grade in '{col}': {grade}")
-                            break
+                            try:
+                                grade_val = row[col]
+                                # Convert to float if it's a string number
+                                if isinstance(grade_val, str):
+                                    grade_val = float(grade_val.replace(',', ''))
+                                grade = grade_val
+                                break
+                            except (ValueError, TypeError):
+                                continue
+                    
+                    # Create numeric grade
+                    grade_numeric = None
+                    if pd.notna(grade):
+                        try:
+                            grade_numeric = float(str(grade).replace(',', ''))
+                        except (ValueError, TypeError):
+                            pass
                     
                     transformed_data.append({
                         'Original_Index': idx,
@@ -79,20 +95,8 @@ def transform_grades_csv(grades_df):
                         'Last_Name': last_name,
                         'Filename': filename,
                         'Grade': grade,
-                        'Grade_Numeric': float(grade) if pd.notna(grade) and str(grade).replace('.','').replace(',','').isdigit() else None
+                        'Grade_Numeric': grade_numeric
                     })
-                    st.write(f"  ✅ Added to transformed data")
-                else:
-                    st.write(f"  ❌ Could not split name into parts")
-            else:
-                st.write(f"  ❌ Could not extract student name from filename")
-        else:
-            st.write(f"  ❌ No .pka filename found in this row")
-        
-        # Stop after a few rows for debugging
-        if idx >= 2:
-            st.write("(Showing first 3 rows only...)")
-            break
     
     return pd.DataFrame(transformed_data)
 
@@ -278,8 +282,6 @@ def main():
                         transformed_grades.loc[idx, 'Full_Name'] = f"{correction['first_name']} {correction['last_name']}"
             else:
                 st.error("Could not extract student names from the Grade Details file. Please check the file format.")
-                st.write("**Raw CSV Data for debugging:**")
-                st.dataframe(grades_df)
                 st.stop()
             
             # Display basic info about the files
@@ -294,32 +296,6 @@ def main():
                 st.write(f"**Grade Details CSV:** {len(grades_df)} submissions")
                 st.write(f"Columns: {len(grades_df.columns)}")
                 
-            # Debug: Show column names and sample data
-            with st.expander("Debug: Column Names and Data"):
-                st.write("**Grades CSV Columns:**")
-                for i, col in enumerate(grades_df.columns):
-                    st.write(f"{i}: '{col}'")
-                
-                st.write("**Sample Raw Data:**")
-                st.dataframe(grades_df.head(3))
-                
-                st.write("**Filename Column Analysis:**")
-                filename_cols = [col for col in grades_df.columns if 'filename' in col.lower() or 'file' in col.lower()]
-                st.write(f"Potential filename columns: {filename_cols}")
-                
-                # Try to show data from all columns to see where the full filename might be
-                st.write("**All Column Data (first row):**")
-                for col in grades_df.columns:
-                    sample_val = str(grades_df[col].iloc[0]) if len(grades_df) > 0 else "No data"
-                    st.write(f"  '{col}': '{sample_val}'")
-                
-                # Try the third column which typically contains filename in your sample
-                if len(grades_df.columns) >= 3:
-                    col_name = grades_df.columns[2]  # Index 2 (third column)
-                    st.write(f"**Testing column index 2 ('{col_name}'):**")
-                    for i, val in enumerate(grades_df[col_name].head(5)):
-                        extracted = extract_student_name_from_filename(val)
-                        st.write(f"  {i}: '{val}' → '{extracted}'")
             
             # Extract Packet Tracer activities
             pt_activities = extract_packet_tracer_columns(brightspace_df)
@@ -444,36 +420,6 @@ def main():
                     st.write("- Student names in the grade details filename don't match Brightspace names")
                     st.write("- Check if the filename format in grade details is correct")
                     
-                    # Show sample data for debugging
-                    with st.expander("Debug Information"):
-                        if len(transformed_grades) > 0:
-                            st.write("**Transformed Grade Details:**")
-                            st.dataframe(transformed_grades[['Full_Name', 'First_Name', 'Last_Name', 'Grade']])
-                        
-                        st.write("**Sample Brightspace Student Names:**")
-                        sample_students = brightspace_df[['First Name', 'Last Name']].head(5)
-                        st.dataframe(sample_students)
-                        
-                        st.write("**Name Matching Attempts:**")
-                        for idx, grade_row in transformed_grades.iterrows():
-                            st.write(f"Trying to match: {grade_row['First_Name']} {grade_row['Last_Name']}")
-                            found_match = False
-                            for bs_idx, bs_row in brightspace_df.iterrows():
-                                if (pd.notna(bs_row['First Name']) and pd.notna(bs_row['Last Name'])):
-                                    if (grade_row['First_Name'].lower() == bs_row['First Name'].lower() and
-                                        grade_row['Last_Name'].lower() == bs_row['Last Name'].lower()):
-                                        st.write(f"  ✅ Exact match: {bs_row['First Name']} {bs_row['Last Name']}")
-                                        found_match = True
-                                        break
-                                    elif (grade_row['First_Name'].lower() in bs_row['First Name'].lower() and
-                                          grade_row['Last_Name'].lower() in bs_row['Last Name'].lower()):
-                                        st.write(f"  ⚠️ Partial match: {bs_row['First Name']} {bs_row['Last Name']}")
-                                        found_match = True
-                                        break
-                            if not found_match:
-                                st.write(f"  ❌ No match found")
-                            if idx >= 2:  # Limit to first 3 for brevity
-                                break
         
         except Exception as e:
             st.error(f"Error processing files: {str(e)}")
